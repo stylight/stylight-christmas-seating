@@ -1,127 +1,138 @@
 fs = require 'fs'
 
-# ---------------------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------------
+# Config
+# ---------------
 
+# Defaults
+tables = 12
+maxPerTable = 8
+rounds = 3
+filename = 'data.csv'
+
+# Override from command line arguments
+args = process.argv.slice 2
+
+i = 0
+while i <= args.length - 1
+    switch args[i]
+        when "-t" then tables = args[i+1]
+        when "-p" then maxPerTable = args[i+1]
+        when "-f" then filename = args[i+1]
+        when "-r" then rounds = args[i+1]
+    i+= 2
+
+console.log "Options : #{tables} tables of max #{maxPerTable} people and #{rounds} rounds."
+
+# Helpers
+# ---------------
+
+# Person class
 class Person
-    constructor: (name, dept) ->
-        @name = name
-        @dept = dept
-        switch dept
-            when 'IT' then @weight = 16
-            when 'SEO' then @weight = 16
-            when 'BD' then @weight = 14
-            when 'SEM' then @weight = 6
-            when 'HR' then @weight = 4
-            when 'QA' then  @weight = 20
-            when 'CCM' then @weight = 16
-            else @weight = 0
-        @rounds = [-1,-1,-1]
-
-    str: ->
-        "#{@name} (#{@dept}) #{@rounds}"
+    constructor: (line) ->
+        info = line.split ','
+        @name = info[1]
+        @dept = info[0]
+        @rounds = new Array rounds
 
     csv: ->
         "#{@name};#{@dept};#{@rounds[0]};#{@rounds[1]};#{@rounds[2]}\n"
 
-# ---------------------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------------
+# True shuffling of array
+shuffle = (array) ->
+  for origin in [array.length-1..1]
+    target = Math.floor Math.random() * (origin + 1)
+    [array[origin], array[target]] = [array[target], array[origin]]
+  array
 
-shuffle = (a) ->
-  for i in [a.length-1..1]
-    j = Math.floor Math.random() * (i + 1)
-    [a[i], a[j]] = [a[j], a[i]]
-  a
-
+# Iterate over the tables
 next = (index) ->
-    if index == 11 then 0 else index + 1
+    if index == tables - 1 then 0 else index + 1
 
-personFromLine = (line) ->
-    info = line.split ','
-    new Person info[1], info[0]
-
+# Get the sub-list of people for a certain table and certain round
 peopleByTableByRound = (people, round, table) ->
     people.filter (p) -> p.rounds[round] == table
 
-# ---------------------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------------
+
+# Tests
+# ---------------
+
+# Define the test you want to run on a table and add them to 'canFillTable'
+# so thath they must validate every time we try to sit someone at a table
 
 tableIsFull = (table) ->
-    table.length >= 8
+    table.length >= maxPerTable
 
 noMoreThanXFromSameDept = (table, person, x) ->
-    same = (item for item in table when item.dept == person.dept)
-    same.length <= x - 1
+    (item for item in table when item.dept == person.dept).length <= x - 1
 
-noMoreThanXFromPreviousRound = (table, person, x) ->
-    same = (item for item in table when item.rounds[round - 1] == person.rounds[round - 1])
-    same.length <= x - 1
+noMoreThanXFromRound = (table, person, round, x) ->
+    (item for item in table when item.rounds[round] == person.rounds[round]).length <= x - 1
 
-noMoreThanXFromTwoPreviousRound = (table, person, x) ->
-    same = (item for item in table when item.rounds[round - 2] == person.rounds[round - 2])
-    same.length <= x - 1
-
-canFillTable = (people, round, runner, person) ->
-    table = peopleByTableByRound people, round, runner
+canFillTable = (people, currentRound, runner, person) ->
+    table = peopleByTableByRound people, currentRound, runner
     full = tableIsFull table
     deptOk = noMoreThanXFromSameDept table, person, 2
-    prevRoundOk = if round >= 1 then noMoreThanXFromPreviousRound table, person, 1 else true
-    prevPrevRoundOk = if round >= 2 then noMoreThanXFromTwoPreviousRound table, person, 2 else true
+    prevRoundOk = if currentRound >= 1 then noMoreThanXFromRound(table, person, currentRound - 1, 2) else true
+    prevPrevRoundOk = if currentRound >= 2 then noMoreThanXFromRound(table, person, currentRound - 2, 2) else true
     (not full) and deptOk and prevRoundOk and prevPrevRoundOk
 
-# ---------------------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------------
+# Run
+# ---------------
 
-printTable = (table, id) ->
-    out = "\nTable #{id} (#{table.length} people)"
-    for person in table
-        out += "\n - #{person.str()} "
-    console.log out
-    out
+console.log "Loading data from #{filename}"
 
-printTables = (people, round) ->
-    runner = -1
-    while runner < 11
-        runner = next runner
-        table = peopleByTableByRound people, round, runner
-        printTable table, runner
+# Load data from csv, use format 'department,name;' for every line
+people = (fs.readFileSync(filename).toString().split ';').map (line) -> new Person line
 
-# ---------------------------------------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------------
+console.log "Found #{people.length} people"
 
-people = (fs.readFileSync('data.csv').toString().split ';').map (line) -> personFromLine line
+# Adapt the number of tables giving priority to the number of people per table
+if tables * maxPerTable < people.length or tables * maxPerTable >= people.length + maxPerTable
+    tables = people.length / maxPerTable
+    if (Math.floor tables) < tables then tables = 1 + Math.floor tables
+    console.log "Adjusting the number of table to #{tables}"
 
+# Calculate weight for each departments
+weights = {}
+for person in people
+    if person.dept of weights then weights[person.dept]++ else weights[person.dept] = 1
+
+console.log "Calculating the weight of each department"
+console.log weights
+
+# Shuffle people list to get different each time
 shuffle people
 
+# Sort people by department weight and department to put the most limiting ones at the top
 people.sort (p1, p2) ->
-    if p1.dept == p2.dept
-        return 0
-    if p1.weight <= p2.weight then 1 else -1
+    if p1.dept == p2.dept then return 0
+    if weights[p1.dept] <= weights[p2.dept] then 1 else -1
 
-console.log "Found #{people.length} people to sit"
+console.log "Start sitting people at tables"
 
 runner = -1
+# Iterate over rounds
+for currentRound in [0..rounds - 1]
 
-for round in [0..2]
+    console.log "\tRound #{currentRound + 1}"
 
-    console.log "\n------------------------\nCalculating round #{round + 0}\n------------------------"
-
+    # Iterate over people and try ti put them at a table, if no table is possible then we consider the failure and throw and exception
     for person in people
         runner = next runner
-        while not canFillTable people, round, runner, person
+        origin = runner
+        while not canFillTable people, currentRound, runner, person
             runner = next runner
-        person.rounds[round] = runner
+            if runner == origin then throw new Error "Tests are too strict and we can't place people"
+        person.rounds[currentRound] = runner
 
-    printTables people, round
+    # Reshuffle and sort after each round (we don't sort by name so it's actually useful to get varying results)
     shuffle people
     people.sort (p1, p2) ->
-        if p1.dept == p2.dept
-            return 0
-        if p1.weight <= p2.weight then 1 else -1
+        if p1.dept == p2.dept then return 0
+        if weights[p1.dept] <= weights[p2.dept] then 1 else -1
 
+# Create csv string & write
 output = "name;department;round 1;round2;round3\n" + people.reduce ((s, person) -> s + person.csv()), ""
 fs.writeFileSync 'out.csv', output
 
-
-
-
+console.log "Result available in output.csv"
